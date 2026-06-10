@@ -381,13 +381,40 @@ body.rmode #rpPage{display:block;min-height:100vh;background:var(--bg);}
   <div class="rp-hdr">
     <div style="font-size:26px;margin-bottom:6px;">📦</div>
     <div class="rp-folio" id="rpFolioNum">—</div>
-    <div class="rp-sub">Confirmar recepción · Codelpa</div>
+    <div class="rp-sub">EnvíoTrack · Codelpa</div>
   </div>
   <div class="rp-body">
     <button class="btn btn-g btn-sm" onclick="backToApp()" style="margin-bottom:12px;width:auto;">← Volver</button>
 
     <!-- Info del envío -->
     <div id="rpInfo"></div>
+
+    <!-- Formulario de EMISOR (cuando el folio está vacío) -->
+    <div id="rpEmisorForm" style="display:none;">
+      <div class="card">
+        <div class="ctitle">📤 Registrar envío en este folio</div>
+        <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">Este folio está libre. Completa los datos para registrar tu envío.</p>
+        <div class="fld"><label>Nombre del envío / producto *</label><input type="text" id="rpeNombre" placeholder="Ej: Muestras barniz UV"></div>
+        <div class="fld"><label>Descripción</label><textarea id="rpeDesc" placeholder="Ej: 3 frascos, frágil"></textarea></div>
+        <div class="row2">
+          <div class="fld"><label>Tu nombre *</label><input type="text" id="rpeEmisorN" placeholder="Nombre completo"></div>
+          <div class="fld"><label>Tu correo *</label><input type="email" id="rpeEmisorM" placeholder="tu@codelpa.cl"></div>
+        </div>
+        <div class="fld"><label>Destinatario</label><input type="text" id="rpeDest" placeholder="Nombre o empresa"></div>
+        <button class="btn btn-p" onclick="rpRegEnvio()" id="btnRpRegEnvio">✅ Registrar envío</button>
+      </div>
+    </div>
+
+    <!-- Confirmación de envío registrado (modo emisor) -->
+    <div id="rpEmisorDone" style="display:none;">
+      <div class="card">
+        <div class="ok-box">
+          <div class="ok-ico">✅</div>
+          <div><div class="ok-title">Envío registrado</div><div class="ok-txt" id="rpEmisorDoneTxt"></div></div>
+        </div>
+        <p style="font-size:13px;color:var(--text2);margin-top:10px;">Pega esta etiqueta en el paquete. Cuando el destinatario lo reciba, escaneará el mismo QR para firmar.</p>
+      </div>
+    </div>
 
     <!-- Formulario unificado (datos + firma en una sola vista) -->
     <div id="rpForm">
@@ -676,33 +703,35 @@ async function openRx(f){
   // Reset pantalla receptor
   document.getElementById('rpForm').style.display='block';
   document.getElementById('rpDone').style.display='none';
+  document.getElementById('rpEmisorForm').style.display='none';
+  document.getElementById('rpEmisorDone').style.display='none';
   ['rpN','rpE','rpM'].forEach(id=>document.getElementById(id).value='');
   clearSig();
 
   document.body.classList.add('rmode');
   document.getElementById('rpFolioNum').textContent='Folio '+f;
+  rpF=f;
 
   // Buscar primero en localStorage (caso emisor en su propio equipo)
   let q=S.list.find(x=>x.f===f);
 
-  // Si no está local (receptor en otro dispositivo), buscar en Google Sheets
+  // Si no está local o está vacío, buscar en Google Sheets
   if(!q || q.s==='empty'){
-    document.getElementById('rpInfo').innerHTML=msgBox('⏳','Cargando información...','Consultando el envío en el servidor.');
+    document.getElementById('rpInfo').innerHTML=msgBox('⏳','Cargando información...','Consultando el folio en el servidor.');
     document.getElementById('rpForm').style.display='none';
     const remote=await fetchFolioFromSheets(f);
-    if(remote){
-      q=remote;
-    }
+    if(remote){ q=remote; }
   }
 
-  document.getElementById('rpForm').style.display='block';
-
-  // Casos especiales
+  // ── CASO 1: folio sin envío registrado → mostrar formulario de EMISOR
   if(!q || !q.env){
-    document.getElementById('rpInfo').innerHTML=msgBox('🔍','Folio no encontrado','El folio <strong>'+f+'</strong> no tiene un envío registrado.');
+    document.getElementById('rpInfo').innerHTML='';
     document.getElementById('rpForm').style.display='none';
+    document.getElementById('rpEmisorForm').style.display='block';
     return;
   }
+
+  // ── CASO 2: folio ya recibido → mostrar mensaje
   if(q.s==='received'){
     const r=q.rx;
     document.getElementById('rpInfo').innerHTML=msgBox('✅','Ya fue recibido','Recibido por <strong>'+(r?r.nombre:'—')+'</strong>'+(r&&r.fecha?' el '+r.fecha:'')+'.');
@@ -710,8 +739,9 @@ async function openRx(f){
     return;
   }
 
-  rpF=f;
-  rpEnvData=q.env; // guardar datos del envío para usar al confirmar
+  // ── CASO 3: folio con envío en tránsito → mostrar formulario de RECEPTOR
+  document.getElementById('rpForm').style.display='block';
+  rpEnvData=q.env;
   const e=q.env;
   document.getElementById('rpInfo').innerHTML=
     '<div class="card" style="margin-bottom:14px;">'
@@ -727,6 +757,33 @@ async function openRx(f){
     +'<div style="font-size:13px;font-weight:700;margin-top:2px;">'+e.fecha+'</div></div>'
     +(e.dest?'<div style="grid-column:1/-1;"><div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;">Para</div><div style="font-size:13px;font-weight:700;margin-top:2px;">'+e.dest+'</div></div>':'')
     +'</div></div></div>';
+}
+
+// ── EMISOR desde el QR escaneado (folio vacío)
+async function rpRegEnvio(){
+  const nombre=document.getElementById('rpeNombre').value.trim();
+  const emisorN=document.getElementById('rpeEmisorN').value.trim();
+  const emisorM=document.getElementById('rpeEmisorM').value.trim();
+  if(!nombre||!emisorN||!emisorM){toast('⚠️ Completa los campos obligatorios (*)');return;}
+
+  const btn=document.getElementById('btnRpRegEnvio');
+  btn.innerHTML='<span class="spin"></span> Registrando...';
+  btn.disabled=true;
+
+  const env={nombre, desc:document.getElementById('rpeDesc').value.trim(), emisorN, emisorM, dest:document.getElementById('rpeDest').value.trim(), fecha:new Date().toISOString().slice(0,10), ts:new Date().toISOString()};
+
+  // Guardar copia local si el folio existe en este dispositivo
+  let q=S.list.find(x=>x.f===rpF);
+  if(q){ q.s='loaded'; q.env=env; save(); updateStats(); }
+
+  // Guardar en Google Sheets (base compartida)
+  await sheetsPush(rpF,'envio',env);
+
+  btn.innerHTML='✅ Registrar envío'; btn.disabled=false;
+  document.getElementById('rpEmisorForm').style.display='none';
+  document.getElementById('rpEmisorDoneTxt').textContent='Folio '+rpF+' · "'+nombre+'" registrado correctamente.';
+  document.getElementById('rpEmisorDone').style.display='block';
+  toast('✅ Envío registrado');
 }
 
 // Busca un folio específico en Google Sheets y reconstruye su estado
