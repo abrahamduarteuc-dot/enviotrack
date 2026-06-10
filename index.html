@@ -671,7 +671,8 @@ function resetSend(){
 
 // ── RECEPTOR PAGE
 let rpF=null;
-function openRx(f){
+let rpEnvData=null; // datos del envío cargados desde Sheets (receptor en otro equipo)
+async function openRx(f){
   // Reset pantalla receptor
   document.getElementById('rpForm').style.display='block';
   document.getElementById('rpDone').style.display='none';
@@ -681,27 +682,36 @@ function openRx(f){
   document.body.classList.add('rmode');
   document.getElementById('rpFolioNum').textContent='Folio '+f;
 
-  const q=S.list.find(x=>x.f===f);
+  // Buscar primero en localStorage (caso emisor en su propio equipo)
+  let q=S.list.find(x=>x.f===f);
+
+  // Si no está local (receptor en otro dispositivo), buscar en Google Sheets
+  if(!q || q.s==='empty'){
+    document.getElementById('rpInfo').innerHTML=msgBox('⏳','Cargando información...','Consultando el envío en el servidor.');
+    document.getElementById('rpForm').style.display='none';
+    const remote=await fetchFolioFromSheets(f);
+    if(remote){
+      q=remote;
+    }
+  }
+
+  document.getElementById('rpForm').style.display='block';
 
   // Casos especiales
-  if(!q){
-    document.getElementById('rpInfo').innerHTML=msgBox('🔍','Folio no encontrado','El folio <strong>'+f+'</strong> no existe en el sistema.');
-    document.getElementById('rpForm').style.display='none';
-    return;
-  }
-  if(q.s==='empty'){
-    document.getElementById('rpInfo').innerHTML=msgBox('⏳','Envío aún no registrado','El emisor todavía no cargó información en este folio.');
+  if(!q || !q.env){
+    document.getElementById('rpInfo').innerHTML=msgBox('🔍','Folio no encontrado','El folio <strong>'+f+'</strong> no tiene un envío registrado.');
     document.getElementById('rpForm').style.display='none';
     return;
   }
   if(q.s==='received'){
     const r=q.rx;
-    document.getElementById('rpInfo').innerHTML=msgBox('✅','Ya fue recibido','Recibido por <strong>'+r.nombre+'</strong> el '+r.fecha+'.');
+    document.getElementById('rpInfo').innerHTML=msgBox('✅','Ya fue recibido','Recibido por <strong>'+(r?r.nombre:'—')+'</strong>'+(r&&r.fecha?' el '+r.fecha:'')+'.');
     document.getElementById('rpForm').style.display='none';
     return;
   }
 
   rpF=f;
+  rpEnvData=q.env; // guardar datos del envío para usar al confirmar
   const e=q.env;
   document.getElementById('rpInfo').innerHTML=
     '<div class="card" style="margin-bottom:14px;">'
@@ -717,6 +727,20 @@ function openRx(f){
     +'<div style="font-size:13px;font-weight:700;margin-top:2px;">'+e.fecha+'</div></div>'
     +(e.dest?'<div style="grid-column:1/-1;"><div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;">Para</div><div style="font-size:13px;font-weight:700;margin-top:2px;">'+e.dest+'</div></div>':'')
     +'</div></div></div>';
+}
+
+// Busca un folio específico en Google Sheets y reconstruye su estado
+async function fetchFolioFromSheets(folio){
+  if(CFG.SHEETS_URL.includes('TU_SCRIPT_ID')) return null;
+  try {
+    const res=await fetch(CFG.SHEETS_URL+'?folio='+encodeURIComponent(folio));
+    const data=await res.json();
+    if(!data || !data.found) return null;
+    const q={f:folio, s:'loaded', env:null, rx:null};
+    if(data.env) q.env=data.env;
+    if(data.rx){ q.rx=data.rx; q.s='received'; }
+    return q.env ? q : null;
+  } catch(e){ console.warn('fetchFolio error:',e); return null; }
 }
 
 function msgBox(ico,ttl,txt){
@@ -757,28 +781,33 @@ async function confirm_rx(){
   btn.innerHTML='<span class="spin"></span> Confirmando...';
   btn.disabled=true;
 
-  const q=S.list.find(x=>x.f===rpF);
   const sigData=sc.toDataURL('image/png');
-  q.s='received';
-  q.rx={nombre,mail,empresa:document.getElementById('rpE').value.trim(),fecha:new Date().toLocaleDateString('es-CL'),ts:new Date().toISOString(),firma:sigData};
-  save(); updateStats();
+  const rx={nombre,mail,empresa:document.getElementById('rpE').value.trim(),fecha:new Date().toLocaleDateString('es-CL'),ts:new Date().toISOString(),firma:sigData};
 
-  // Guardar en Google Sheets
-  await sheetsPush(rpF,'recepcion',q.rx);
+  // Actualizar copia local si existe (caso emisor mismo equipo)
+  let q=S.list.find(x=>x.f===rpF);
+  if(q){ q.s='received'; q.rx=rx; save(); updateStats(); }
+
+  // Datos del envío: del local o de rpEnvData (cargado desde Sheets)
+  const env = (q && q.env) ? q.env : rpEnvData;
+
+  // Guardar recepción en Google Sheets (sin la firma, que es muy pesada)
+  const rxLite={nombre:rx.nombre, mail:rx.mail, empresa:rx.empresa, fecha:rx.fecha, ts:rx.ts};
+  await sheetsPush(rpF,'recepcion',rxLite);
 
   // Enviar mail al emisor
-  await sendMail(q);
+  await sendMailRx(env, rx, rpF);
 
   btn.innerHTML='✅ Confirmar recepción'; btn.disabled=false;
   document.getElementById('rpForm').style.display='none';
-  document.getElementById('rpDoneTxt').textContent='"'+q.env.nombre+'" recibido. Se notificó a '+q.env.emisorM+'.';
+  document.getElementById('rpDoneTxt').textContent='"'+(env?env.nombre:'')+'" recibido. Se notificó a '+(env?env.emisorM:'')+'.';
   document.getElementById('rpReceipt').innerHTML=
     '<div style="font-weight:700;margin-bottom:8px;">🧾 Comprobante</div>'
     +'<div style="display:grid;gap:4px;color:var(--text2);">'
     +'<div>📦 <strong>Folio:</strong> '+rpF+'</div>'
-    +'<div>📋 <strong>Producto:</strong> '+q.env.nombre+'</div>'
-    +'<div>📤 <strong>Enviado por:</strong> '+q.env.emisorN+'</div>'
-    +'<div>📥 <strong>Recibido por:</strong> '+nombre+(q.rx.empresa?' · '+q.rx.empresa:'')+'</div>'
+    +'<div>📋 <strong>Producto:</strong> '+(env?env.nombre:'—')+'</div>'
+    +'<div>📤 <strong>Enviado por:</strong> '+(env?env.emisorN:'—')+'</div>'
+    +'<div>📥 <strong>Recibido por:</strong> '+nombre+(rx.empresa?' · '+rx.empresa:'')+'</div>'
     +'<div>📅 <strong>Fecha:</strong> '+new Date().toLocaleString('es-CL')+'</div></div>'
     +'<img src="'+sigData+'" style="margin-top:10px;border:1px solid var(--border);border-radius:6px;width:100%;height:50px;object-fit:contain;">';
   document.getElementById('rpDone').style.display='block';
@@ -786,30 +815,33 @@ async function confirm_rx(){
 }
 
 // ── GOOGLE SHEETS
+// Guarda un registro (envío o recepción). El payload se serializa como JSON.
 async function sheetsPush(folio, tipo, payload){
   if(CFG.SHEETS_URL.includes('TU_SCRIPT_ID')) return; // no configurado aún
   try {
     await fetch(CFG.SHEETS_URL, {
       method:'POST',
       mode:'no-cors',
-      headers:{'Content-Type':'application/json'},
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
       body: JSON.stringify({action:'save', folio, tipo, payload: JSON.stringify(payload)})
     });
   } catch(e){ console.warn('Sheets error:',e); }
 }
 
-// ── EMAILJS
-async function sendMail(q){
+// ── EMAILJS — notificación al emisor cuando el receptor confirma
+async function sendMailRx(env, rx, folio){
   if(CFG.EMAILJS.publicKey==='TU_PUBLIC_KEY') return; // no configurado aún
+  if(!env || !env.emisorM) return;
   try {
     await emailjs.send(CFG.EMAILJS.serviceID, CFG.EMAILJS.templateID, {
-      to_email: q.env.emisorM,
-      folio:    q.f,
-      producto: q.env.nombre,
-      receptor: q.rx.nombre,
-      empresa:  q.rx.empresa || '—',
-      fecha:    q.rx.fecha,
-      org:      CFG.ORG
+      to_email:  env.emisorM,
+      from_name: env.emisorN || 'Emisor',
+      folio:     folio,
+      producto:  env.nombre || '',
+      receptor:  rx.nombre,
+      empresa:   rx.empresa || '—',
+      fecha:     rx.fecha,
+      org:       CFG.ORG
     });
   } catch(e){ console.warn('EmailJS error:',e); }
 }
