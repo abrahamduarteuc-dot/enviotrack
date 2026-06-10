@@ -6,6 +6,7 @@
 <title>EnvíoTrack — Codelpa</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
 <!-- ============================================================
      ENVÍOTRACK v1.0 — Codelpa R&D
@@ -310,22 +311,24 @@ body.rmode #rpPage{display:block;min-height:100vh;background:var(--bg);}
         <div class="step-seg" id="se2"></div>
       </div>
 
-      <!-- Paso 1: elegir folio -->
+      <!-- Paso 1: escanear folio con cámara -->
       <div id="sStep1">
-        <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">Toca el número de la etiqueta que pegaste en el paquete.</p>
-        <div style="background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--rs);padding:13px;">
-          <div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Folios disponibles</div>
-          <div class="chips" id="folioChips"><span style="font-size:13px;color:var(--text3);">Sin folios. Ve a Admin → Generar.</span></div>
+        <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">Escanea el código QR de la etiqueta que vas a pegar en el paquete.</p>
+        <div id="scanBox" style="background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--rs);padding:13px;text-align:center;">
+          <div id="qrReader" style="width:100%;max-width:300px;margin:0 auto;border-radius:var(--rs);overflow:hidden;"></div>
+          <button class="btn btn-p" id="btnStartScan" onclick="startScan()" style="margin-top:12px;">📷 Iniciar escáner</button>
+          <p style="font-size:11px;color:var(--text3);margin-top:8px;">Permite el acceso a la cámara cuando el navegador lo solicite</p>
         </div>
         <div id="selFolioBx" style="display:none;margin-top:12px;">
           <div style="background:var(--accent-light);border-radius:var(--rs);padding:12px 14px;display:flex;align-items:center;gap:12px;margin-bottom:12px;">
             <span style="font-size:22px;">🏷️</span>
             <div>
-              <div style="font-size:10px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:.04em;">Seleccionado</div>
+              <div style="font-size:10px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:.04em;">Folio escaneado</div>
               <div style="font-size:28px;font-weight:900;color:var(--accent);" id="selFolioTxt">—</div>
             </div>
           </div>
           <button class="btn btn-p" onclick="sNext()">Continuar → Datos del envío</button>
+          <button class="btn btn-g" onclick="rescan()" style="margin-top:8px;">↺ Escanear otro</button>
         </div>
       </div>
 
@@ -388,33 +391,6 @@ body.rmode #rpPage{display:block;min-height:100vh;background:var(--bg);}
 
     <!-- Info del envío -->
     <div id="rpInfo"></div>
-
-    <!-- Formulario de EMISOR (cuando el folio está vacío) -->
-    <div id="rpEmisorForm" style="display:none;">
-      <div class="card">
-        <div class="ctitle">📤 Registrar envío en este folio</div>
-        <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">Este folio está libre. Completa los datos para registrar tu envío.</p>
-        <div class="fld"><label>Nombre del envío / producto *</label><input type="text" id="rpeNombre" placeholder="Ej: Muestras barniz UV"></div>
-        <div class="fld"><label>Descripción</label><textarea id="rpeDesc" placeholder="Ej: 3 frascos, frágil"></textarea></div>
-        <div class="row2">
-          <div class="fld"><label>Tu nombre *</label><input type="text" id="rpeEmisorN" placeholder="Nombre completo"></div>
-          <div class="fld"><label>Tu correo *</label><input type="email" id="rpeEmisorM" placeholder="tu@codelpa.cl"></div>
-        </div>
-        <div class="fld"><label>Destinatario</label><input type="text" id="rpeDest" placeholder="Nombre o empresa"></div>
-        <button class="btn btn-p" onclick="rpRegEnvio()" id="btnRpRegEnvio">✅ Registrar envío</button>
-      </div>
-    </div>
-
-    <!-- Confirmación de envío registrado (modo emisor) -->
-    <div id="rpEmisorDone" style="display:none;">
-      <div class="card">
-        <div class="ok-box">
-          <div class="ok-ico">✅</div>
-          <div><div class="ok-title">Envío registrado</div><div class="ok-txt" id="rpEmisorDoneTxt"></div></div>
-        </div>
-        <p style="font-size:13px;color:var(--text2);margin-top:10px;">Pega esta etiqueta en el paquete. Cuando el destinatario lo reciba, escaneará el mismo QR para firmar.</p>
-      </div>
-    </div>
 
     <!-- Formulario unificado (datos + firma en una sola vista) -->
     <div id="rpForm">
@@ -573,7 +549,8 @@ function tab(name){
     document.getElementById('tab-'+n).classList.toggle('on', n===name);
   });
   if(name==='admin'){ renderGrid(); updateStats(); }
-  if(name==='send'){ renderChips(); }
+  if(name==='send'){ /* el escáner se inicia con el botón */ }
+  if(name!=='send'){ stopScan(); }
   if(name==='log'){ renderLog(); setFilt('all'); }
 }
 
@@ -586,13 +563,20 @@ function updateStats(){
 updateStats();
 
 // ── GENERAR QR
-function genQRs(){
+async function genQRs(){
   const n = parseInt(document.getElementById('qrCount').value);
+  const btn=event&&event.target?event.target.closest('button'):null;
+  if(btn){ btn.innerHTML='<span class="spin"></span> Generando...'; btn.disabled=true; }
+  const nuevos=[];
   for(let i=0;i<n;i++){
     const f = String(S.next++).padStart(3,'0');
     S.list.push({f, s:'empty', env:null, rx:null});
+    nuevos.push(f);
   }
   save(); renderGrid(); updateStats();
+  // Persistir en Google Sheets con estado LIBRE
+  for(const f of nuevos){ await sheetsPush(f,'libre',{estado:'libre'}); }
+  if(btn){ btn.innerHTML='⚡ Generar'; btn.disabled=false; }
   toast('✅ '+n+' folios generados');
 }
 
@@ -624,22 +608,96 @@ function qClick(f){
   } else { openDetail(f); }
 }
 
-// ── EMISOR — Paso 1
-let selF = null, lastF = null;
-function renderChips(){
-  const c=document.getElementById('folioChips');
-  const av=S.list.filter(q=>q.s==='empty');
-  if(!av.length){ c.innerHTML='<span style="font-size:13px;color:var(--text3);">Sin folios. Ve a Admin → Generar.</span>'; return; }
-  c.innerHTML=av.map(q=>'<span class="chip'+(selF===q.f?' on':'')+'" onclick="pickFolio(\''+q.f+'\')">'+q.f+'</span>').join('');
+// ── EMISOR — Paso 1: escanear QR con cámara
+let selF = null, lastF = null, qrScanner = null;
+
+function startScan(){
+  const btn=document.getElementById('btnStartScan');
+  btn.innerHTML='<span class="spin"></span> Abriendo cámara...';
+  btn.disabled=true;
+
+  if(typeof Html5Qrcode==='undefined'){
+    toast('⚠️ Lector no disponible, recarga la página');
+    btn.innerHTML='📷 Iniciar escáner'; btn.disabled=false;
+    return;
+  }
+
+  qrScanner = new Html5Qrcode('qrReader');
+  qrScanner.start(
+    { facingMode: 'environment' },
+    { fps: 10, qrbox: { width: 200, height: 200 } },
+    (decodedText) => { onScanSuccess(decodedText); },
+    () => {} // ignorar errores de lectura continua
+  ).then(()=>{
+    btn.style.display='none';
+  }).catch(err=>{
+    console.warn('Scan error:',err);
+    toast('⚠️ No se pudo abrir la cámara. Revisa los permisos.');
+    btn.innerHTML='📷 Iniciar escáner'; btn.disabled=false;
+  });
 }
-function pickFolio(f){
-  selF=f;
-  document.getElementById('selFolioTxt').textContent=f;
+
+function stopScan(){
+  if(qrScanner){
+    qrScanner.stop().then(()=>{ qrScanner.clear(); qrScanner=null; }).catch(()=>{ qrScanner=null; });
+  }
+}
+
+async function onScanSuccess(text){
+  // Extraer el folio del texto del QR (puede ser URL #rx/001 o solo 001)
+  let folio = text;
+  if(text.includes('#rx/')) folio = text.split('#rx/')[1];
+  folio = folio.replace(/[^0-9]/g,'').padStart(3,'0');
+  if(!folio || folio==='000'){ toast('⚠️ QR no válido'); return; }
+
+  stopScan();
+  document.getElementById('selFolioTxt').textContent='Verificando '+folio+'...';
   document.getElementById('selFolioBx').style.display='block';
-  renderChips();
+
+  // Validar contra Google Sheets
+  const remote = await fetchFolioFromSheets(folio);
+  if(!remote || remote.estado==='inexistente'){
+    toast('⚠️ Folio '+folio+' no existe en el sistema');
+    document.getElementById('selFolioBx').style.display='none';
+    document.getElementById('btnStartScan').style.display='inline-flex';
+    document.getElementById('btnStartScan').innerHTML='📷 Iniciar escáner';
+    document.getElementById('btnStartScan').disabled=false;
+    return;
+  }
+  if(remote.estado==='transito'){
+    toast('⚠️ Folio '+folio+' ya tiene un envío en tránsito');
+    document.getElementById('selFolioBx').style.display='none';
+    document.getElementById('btnStartScan').style.display='inline-flex';
+    document.getElementById('btnStartScan').innerHTML='📷 Iniciar escáner';
+    document.getElementById('btnStartScan').disabled=false;
+    return;
+  }
+  if(remote.estado==='recibido'){
+    toast('⚠️ Folio '+folio+' ya fue recibido');
+    document.getElementById('selFolioBx').style.display='none';
+    document.getElementById('btnStartScan').style.display='inline-flex';
+    document.getElementById('btnStartScan').innerHTML='📷 Iniciar escáner';
+    document.getElementById('btnStartScan').disabled=false;
+    return;
+  }
+
+  // Folio LIBRE: listo para registrar
+  selF = folio;
+  document.getElementById('selFolioTxt').textContent = folio;
+  toast('✅ Folio '+folio+' disponible');
 }
+
+function rescan(){
+  selF=null;
+  document.getElementById('selFolioBx').style.display='none';
+  document.getElementById('btnStartScan').style.display='inline-flex';
+  document.getElementById('btnStartScan').innerHTML='📷 Iniciar escáner';
+  document.getElementById('btnStartScan').disabled=false;
+  startScan();
+}
+
 function sNext(){
-  if(!selF){toast('⚠️ Selecciona un folio');return;}
+  if(!selF){toast('⚠️ Escanea un folio primero');return;}
   document.getElementById('sStep1').style.display='none';
   document.getElementById('sStep2').style.display='block';
   document.getElementById('sFolioBdg').textContent='Folio '+selF;
@@ -693,7 +751,8 @@ function resetSend(){
   document.getElementById('selFolioBx').style.display='none';
   document.getElementById('se1').className='step-seg act';
   document.getElementById('se2').className='step-seg';
-  renderChips();
+  const b=document.getElementById('btnStartScan');
+  if(b){ b.style.display='inline-flex'; b.innerHTML='📷 Iniciar escáner'; b.disabled=false; }
 }
 
 // ── RECEPTOR PAGE
@@ -703,8 +762,6 @@ async function openRx(f){
   // Reset pantalla receptor
   document.getElementById('rpForm').style.display='block';
   document.getElementById('rpDone').style.display='none';
-  document.getElementById('rpEmisorForm').style.display='none';
-  document.getElementById('rpEmisorDone').style.display='none';
   ['rpN','rpE','rpM'].forEach(id=>document.getElementById(id).value='');
   clearSig();
 
@@ -712,37 +769,33 @@ async function openRx(f){
   document.getElementById('rpFolioNum').textContent='Folio '+f;
   rpF=f;
 
-  // Buscar primero en localStorage (caso emisor en su propio equipo)
-  let q=S.list.find(x=>x.f===f);
+  // Google Sheets es la fuente de verdad: consultar estado del folio
+  document.getElementById('rpInfo').innerHTML=msgBox('⏳','Cargando...','Consultando el folio en el servidor.');
+  document.getElementById('rpForm').style.display='none';
 
-  // Si no está local o está vacío, buscar en Google Sheets
-  if(!q || q.s==='empty'){
-    document.getElementById('rpInfo').innerHTML=msgBox('⏳','Cargando información...','Consultando el folio en el servidor.');
-    document.getElementById('rpForm').style.display='none';
-    const remote=await fetchFolioFromSheets(f);
-    if(remote){ q=remote; }
-  }
+  const remote=await fetchFolioFromSheets(f);
 
-  // ── CASO 1: folio sin envío registrado → mostrar formulario de EMISOR
-  if(!q || !q.env){
-    document.getElementById('rpInfo').innerHTML='';
-    document.getElementById('rpForm').style.display='none';
-    document.getElementById('rpEmisorForm').style.display='block';
+  // ── Folio inexistente
+  if(!remote || remote.estado==='inexistente'){
+    document.getElementById('rpInfo').innerHTML=msgBox('🔍','Folio no encontrado','El folio <strong>'+f+'</strong> no existe en el sistema.');
     return;
   }
-
-  // ── CASO 2: folio ya recibido → mostrar mensaje
-  if(q.s==='received'){
-    const r=q.rx;
+  // ── Folio LIBRE: el envío aún no fue registrado
+  if(remote.estado==='libre' || !remote.env){
+    document.getElementById('rpInfo').innerHTML=msgBox('📭','Envío aún no registrado','El folio <strong>'+f+'</strong> todavía no tiene un envío asociado. El emisor debe registrarlo desde la aplicación antes de la recepción.');
+    return;
+  }
+  // ── Folio ya RECIBIDO
+  if(remote.estado==='recibido'){
+    const r=remote.rx;
     document.getElementById('rpInfo').innerHTML=msgBox('✅','Ya fue recibido','Recibido por <strong>'+(r?r.nombre:'—')+'</strong>'+(r&&r.fecha?' el '+r.fecha:'')+'.');
-    document.getElementById('rpForm').style.display='none';
     return;
   }
 
-  // ── CASO 3: folio con envío en tránsito → mostrar formulario de RECEPTOR
+  // ── Folio EN TRÁNSITO: mostrar formulario de recepción
   document.getElementById('rpForm').style.display='block';
-  rpEnvData=q.env;
-  const e=q.env;
+  rpEnvData=remote.env;
+  const e=remote.env;
   document.getElementById('rpInfo').innerHTML=
     '<div class="card" style="margin-bottom:14px;">'
     +'<div class="ctitle">📦 Paquete recibido</div>'
@@ -759,44 +812,13 @@ async function openRx(f){
     +'</div></div></div>';
 }
 
-// ── EMISOR desde el QR escaneado (folio vacío)
-async function rpRegEnvio(){
-  const nombre=document.getElementById('rpeNombre').value.trim();
-  const emisorN=document.getElementById('rpeEmisorN').value.trim();
-  const emisorM=document.getElementById('rpeEmisorM').value.trim();
-  if(!nombre||!emisorN||!emisorM){toast('⚠️ Completa los campos obligatorios (*)');return;}
-
-  const btn=document.getElementById('btnRpRegEnvio');
-  btn.innerHTML='<span class="spin"></span> Registrando...';
-  btn.disabled=true;
-
-  const env={nombre, desc:document.getElementById('rpeDesc').value.trim(), emisorN, emisorM, dest:document.getElementById('rpeDest').value.trim(), fecha:new Date().toISOString().slice(0,10), ts:new Date().toISOString()};
-
-  // Guardar copia local si el folio existe en este dispositivo
-  let q=S.list.find(x=>x.f===rpF);
-  if(q){ q.s='loaded'; q.env=env; save(); updateStats(); }
-
-  // Guardar en Google Sheets (base compartida)
-  await sheetsPush(rpF,'envio',env);
-
-  btn.innerHTML='✅ Registrar envío'; btn.disabled=false;
-  document.getElementById('rpEmisorForm').style.display='none';
-  document.getElementById('rpEmisorDoneTxt').textContent='Folio '+rpF+' · "'+nombre+'" registrado correctamente.';
-  document.getElementById('rpEmisorDone').style.display='block';
-  toast('✅ Envío registrado');
-}
-
-// Busca un folio específico en Google Sheets y reconstruye su estado
+// Consulta el estado completo de un folio en Google Sheets
 async function fetchFolioFromSheets(folio){
   if(CFG.SHEETS_URL.includes('TU_SCRIPT_ID')) return null;
   try {
     const res=await fetch(CFG.SHEETS_URL+'?folio='+encodeURIComponent(folio));
     const data=await res.json();
-    if(!data || !data.found) return null;
-    const q={f:folio, s:'loaded', env:null, rx:null};
-    if(data.env) q.env=data.env;
-    if(data.rx){ q.rx=data.rx; q.s='received'; }
-    return q.env ? q : null;
+    return data; // {found, estado, env, rx}
   } catch(e){ console.warn('fetchFolio error:',e); return null; }
 }
 
