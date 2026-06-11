@@ -1099,17 +1099,7 @@ async function openDetail(f){
   }
   document.getElementById('mBody').innerHTML=h;
 }
-function openDetail(f){
-  const q=S.list.find(x=>x.f===f); if(!q)return;
-  document.getElementById('mTitle').textContent='Folio '+f;
-  let h='';
-  if(q.s==='empty') h='<span class="bdg bdg-gr">Sin asignar</span><p style="margin-top:8px;font-size:13px;color:var(--text2);">Sin información cargada.</p>';
-  if(q.env){const e=q.env; h+='<div class="ibox ibox-w"><div class="ibox-lbl">📤 Envío</div><div class="irow"><strong>Producto:</strong> '+e.nombre+'</div>'+(e.desc?'<div class="irow"><strong>Desc:</strong> '+e.desc+'</div>':'')+'<div class="irow"><strong>Emisor:</strong> '+e.emisorN+' &lt;'+e.emisorM+'&gt;</div>'+(e.dest?'<div class="irow"><strong>Para:</strong> '+e.dest+'</div>':'')+'<div class="irow"><strong>Fecha:</strong> '+e.fecha+'</div></div>';}
-  if(q.rx){const r=q.rx; h+='<div class="ibox ibox-g"><div class="ibox-lbl">📥 Recepción</div><div class="irow"><strong>Recibido por:</strong> '+r.nombre+'</div>'+(r.empresa?'<div class="irow"><strong>Empresa:</strong> '+r.empresa+'</div>':'')+'<div class="irow"><strong>Correo:</strong> '+r.mail+'</div><div class="irow"><strong>Fecha:</strong> '+r.fecha+'</div><img src="'+r.firma+'" style="margin-top:7px;border:1px solid #ccc;border-radius:5px;width:100%;height:50px;object-fit:contain;"></div>';}
-  if(q.s==='loaded') h+='<button class="btn btn-w" style="margin-top:4px;" onclick="closeMDetail();openRx(\''+f+'\')">📱 Simular escaneo del receptor</button>';
-  document.getElementById('mBody').innerHTML=h;
-  document.getElementById('mDetail').classList.add('open');
-}
+
 function closeMDetail(){document.getElementById('mDetail').classList.remove('open');}
 document.getElementById('mDetail').addEventListener('click',function(e){if(e.target===this)closeMDetail();});
 
