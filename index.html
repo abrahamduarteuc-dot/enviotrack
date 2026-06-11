@@ -601,8 +601,8 @@ async function genQRs(){
     nuevos.push(f);
   }
   save(); renderGrid(); updateStats();
-  // Persistir en Google Sheets con estado LIBRE
-  for(const f of nuevos){ await sheetsPush(f,'libre',{estado:'libre'}); }
+  // Persistir todos los folios en un solo batch (evita timeouts secuenciales)
+  sheetsPushBatch(nuevos.map(f=>({folio:parseInt(f,10), tipo:'libre', payload:{estado:'libre'}}))).catch(e=>console.warn('Batch push error:',e));
   if(btn){ btn.innerHTML='⚡ Generar'; btn.disabled=false; }
   toast('✅ '+n+' folios generados');
 }
@@ -935,7 +935,7 @@ async function confirm_rx(){
 }
 
 // ── GOOGLE SHEETS
-// Guarda un registro con timeout de 8 segundos para no bloquear la UI
+// Guarda un registro individual con timeout de 8 segundos
 async function sheetsPush(folio, tipo, payload){
   if(CFG.SHEETS_URL.includes('TU_SCRIPT_ID')) return;
   const body = JSON.stringify({action:'save', folio: parseInt(folio,10), tipo, payload: JSON.stringify(payload)});
@@ -943,17 +943,33 @@ async function sheetsPush(folio, tipo, payload){
   const timer = setTimeout(()=>controller.abort(), 8000);
   try {
     await fetch(CFG.SHEETS_URL, {
-      method:'POST',
-      mode:'no-cors',
+      method:'POST', mode:'no-cors',
       headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body,
-      signal: controller.signal
+      body, signal: controller.signal
     });
   } catch(e){
     console.warn('Sheets push error (non-blocking):', e.name==='AbortError'?'timeout':e);
-  } finally {
-    clearTimeout(timer);
-  }
+  } finally { clearTimeout(timer); }
+}
+
+// Guarda múltiples registros en un solo request (batch)
+async function sheetsPushBatch(rows){
+  if(CFG.SHEETS_URL.includes('TU_SCRIPT_ID')) return;
+  const body = JSON.stringify({
+    action:'saveBatch',
+    rows: rows.map(r=>({folio: parseInt(r.folio,10), tipo: r.tipo, payload: JSON.stringify(r.payload)}))
+  });
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), 15000);
+  try {
+    await fetch(CFG.SHEETS_URL, {
+      method:'POST', mode:'no-cors',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body, signal: controller.signal
+    });
+  } catch(e){
+    console.warn('Sheets batch error:', e.name==='AbortError'?'timeout':e);
+  } finally { clearTimeout(timer); }
 }
 
 // ── EMAILJS — notificación al emisor cuando el receptor confirma
@@ -1036,18 +1052,52 @@ async function renderLog(){
 }
 
 // ── MODAL DETALLE
-function openDetail(f){
-  // Buscar primero en el cache de Sheets, luego en localStorage
-  let q=logCache.find(x=>x.f===f) || S.list.find(x=>x.f===f);
-  if(!q){ toast('⚠️ Detalle no disponible'); return; }
+async function openDetail(f){
   document.getElementById('mTitle').textContent='Folio '+f;
-  let h='';
-  if(q.s==='empty') h='<span class="bdg bdg-gr">Sin asignar</span>';
-  if(q.env){const e=q.env; h+='<div class="ibox ibox-w"><div class="ibox-lbl">📤 Envío</div><div class="irow"><strong>Producto:</strong> '+(e.nombre||'—')+'</div>'+(e.desc?'<div class="irow"><strong>Desc:</strong> '+e.desc+'</div>':'')+'<div class="irow"><strong>Emisor:</strong> '+(e.emisorN||'—')+' &lt;'+(e.emisorM||'')+'&gt;</div>'+(e.dest?'<div class="irow"><strong>Para:</strong> '+e.dest+'</div>':'')+'<div class="irow"><strong>Fecha:</strong> '+(e.fecha||'—')+'</div></div>';}
-  if(q.rx){const r=q.rx; h+='<div class="ibox ibox-g"><div class="ibox-lbl">📥 Recepción</div><div class="irow"><strong>Recibido por:</strong> '+(r.nombre||'—')+'</div>'+(r.empresa?'<div class="irow"><strong>Empresa:</strong> '+r.empresa+'</div>':'')+'<div class="irow"><strong>Correo:</strong> '+(r.mail||'—')+'</div><div class="irow"><strong>Fecha:</strong> '+(r.fecha||'—')+'</div></div>';}
-  if(q.s==='loaded') h+='<button class="btn btn-w" style="margin-top:4px;" onclick="closeMDetail();openRx(\''+f+'\', true)">📱 Simular escaneo del receptor</button>';
-  document.getElementById('mBody').innerHTML=h;
+  document.getElementById('mBody').innerHTML='<div style="text-align:center;padding:20px;color:var(--text3);">⏳ Cargando...</div>';
   document.getElementById('mDetail').classList.add('open');
+
+  // Buscar primero en logCache (ya cargado de Sheets), luego en localStorage
+  let q = logCache.find(x=>x.f===f) || S.list.find(x=>x.f===f);
+
+  // Si no está en caché o le faltan datos, consultar Sheets directamente
+  if(!q || (!q.env && !q.rx)){
+    const remote = await fetchFolioFromSheets(f);
+    if(remote && remote.found){
+      // Adaptar el formato de Sheets al formato que usa el modal
+      q = {
+        f,
+        s: remote.estado==='recibido'?'received': remote.estado==='transito'?'loaded':'empty',
+        env: remote.env || null,
+        rx: remote.rx || null
+      };
+    }
+  }
+
+  let h='';
+  if(!q || q.s==='empty'){
+    h='<span class="bdg bdg-gr">Sin asignar</span><p style="margin-top:8px;font-size:13px;color:var(--text2);">Sin información cargada.</p>';
+  } else {
+    if(q.env){
+      const e=q.env;
+      h+='<div class="ibox ibox-w"><div class="ibox-lbl">📤 Envío</div>'
+        +'<div class="irow"><strong>Producto:</strong> '+(e.nombre||'—')+'</div>'
+        +(e.desc?'<div class="irow"><strong>Desc:</strong> '+e.desc+'</div>':'')
+        +'<div class="irow"><strong>Emisor:</strong> '+(e.emisorN||'—')+' &lt;'+(e.emisorM||'')+'&gt;</div>'
+        +(e.dest?'<div class="irow"><strong>Para:</strong> '+e.dest+'</div>':'')
+        +'<div class="irow"><strong>Fecha:</strong> '+(e.fecha||'—')+'</div></div>';
+    }
+    if(q.rx){
+      const r=q.rx;
+      h+='<div class="ibox ibox-g"><div class="ibox-lbl">📥 Recepción</div>'
+        +'<div class="irow"><strong>Recibido por:</strong> '+(r.nombre||'—')+'</div>'
+        +(r.empresa?'<div class="irow"><strong>Empresa:</strong> '+r.empresa+'</div>':'')
+        +'<div class="irow"><strong>Correo:</strong> '+(r.mail||'—')+'</div>'
+        +'<div class="irow"><strong>Fecha:</strong> '+(r.fecha||'—')+'</div></div>';
+    }
+    if(q.s==='loaded') h+='<button class="btn btn-w" style="margin-top:4px;" onclick="closeMDetail();openRx(\''+f+'\', true)">📱 Simular escaneo del receptor</button>';
+  }
+  document.getElementById('mBody').innerHTML=h;
 }
 function openDetail(f){
   const q=S.list.find(x=>x.f===f); if(!q)return;
