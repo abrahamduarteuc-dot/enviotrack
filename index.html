@@ -893,6 +893,14 @@ async function confirm_rx(){
   if(!nombre||!mail){toast('⚠️ Nombre y correo son obligatorios');return;}
   if(!signed){toast('⚠️ Firma en el recuadro para continuar');return;}
 
+  // Respaldo: si rpF se perdió, recuperarlo de la URL
+  if(!rpF){
+    const p=new URLSearchParams(window.location.search);
+    if(p.get('rx')) rpF=normFolio(p.get('rx'));
+    else if(window.location.hash.startsWith('#rx/')) rpF=normFolio(window.location.hash.replace('#rx/',''));
+  }
+  if(!rpF){ toast('⚠️ Error: folio no identificado'); return; }
+
   const btn=document.getElementById('btnConfirmRx');
   btn.innerHTML='<span class="spin"></span> Confirmando...';
   btn.disabled=true;
@@ -952,10 +960,14 @@ async function sheetsPush(folio, tipo, payload){
 
 // ── EMAILJS — notificación al emisor cuando el receptor confirma
 async function sendMailRx(env, rx, folio){
-  if(CFG.EMAILJS.publicKey==='TU_PUBLIC_KEY') return; // no configurado aún
-  if(!env || !env.emisorM) return;
+  if(CFG.EMAILJS.publicKey==='TU_PUBLIC_KEY'){ console.warn('EmailJS no configurado'); return; }
+  if(!env){ console.warn('sendMailRx: sin datos de envío'); return; }
+  if(!env.emisorM){ console.warn('sendMailRx: sin correo del emisor', env); toast('⚠️ Envío sin correo de emisor — no se notificó'); return; }
+  if(typeof emailjs==='undefined'){ console.warn('Librería EmailJS no cargó'); return; }
   try {
-    await emailjs.send(CFG.EMAILJS.serviceID, CFG.EMAILJS.templateID, {
+    // Asegurar inicialización
+    emailjs.init(CFG.EMAILJS.publicKey);
+    const resp = await emailjs.send(CFG.EMAILJS.serviceID, CFG.EMAILJS.templateID, {
       to_email:  env.emisorM,
       from_name: env.emisorN || 'Emisor',
       folio:     folio,
@@ -963,9 +975,14 @@ async function sendMailRx(env, rx, folio){
       receptor:  rx.nombre,
       empresa:   rx.empresa || '—',
       fecha:     rx.fecha,
-      org:       CFG.ORG
+      org:       CFG.ORG || 'Codelpa'
     });
-  } catch(e){ console.warn('EmailJS error:',e); }
+    console.log('Mail enviado:', resp.status, resp.text);
+    toast('📧 Notificación enviada a '+env.emisorM);
+  } catch(e){
+    console.error('EmailJS error:', e);
+    toast('⚠️ No se pudo enviar el correo: '+(e.text||e.message||'error'));
+  }
 }
 
 // ── REGISTROS
@@ -980,6 +997,7 @@ function setFilt(f){
   });
 }
 function filt(f){setFilt(f);renderLog();}
+let logCache=[]; // cache de los registros mostrados (incluye los de Sheets)
 async function renderLog(){
   const c=document.getElementById('recList');
   c.innerHTML='<div class="empty"><div class="empty-ico">⏳</div><div style="font-size:14px;">Cargando...</div></div>';
@@ -998,12 +1016,13 @@ async function renderLog(){
         try{ payload=typeof r[2]==='string'?JSON.parse(r[2]):r[2]; }catch(e){}
         if(!map[folio]) map[folio]={f:folio,s:'empty',env:null,rx:null};
         if(tipo==='envio'){ map[folio].env=payload; map[folio].s='loaded'; }
-        if(tipo==='recepcion'){ map[folio].rx=payload; map[folio].s='received'; }
+        if(tipo==='recepcion'){ map[folio].rx=payload; if(map[folio].s!=='received') map[folio].s='received'; }
       });
       items=Object.values(map).filter(q=>q.s!=='empty').reverse();
     }
   } catch(e){ console.warn('renderLog error:',e); }
   if(!items.length) items=[...S.list].filter(q=>q.s!=='empty').reverse();
+  logCache=items; // guardar para openDetail
   if(cf==='loaded') items=items.filter(q=>q.s==='loaded');
   if(cf==='received') items=items.filter(q=>q.s==='received');
   if(!items.length){c.innerHTML='<div class="empty"><div class="empty-ico">📭</div><div style="font-size:14px;">Sin registros</div></div>';return;}
@@ -1020,13 +1039,14 @@ async function renderLog(){
 
 // ── MODAL DETALLE
 function openDetail(f){
-  const q=S.list.find(x=>x.f===f);
-  if(!q){ toast('⚠️ Abre Registros desde la misma sesión para ver detalle'); return; }
+  // Buscar primero en el cache de Sheets, luego en localStorage
+  let q=logCache.find(x=>x.f===f) || S.list.find(x=>x.f===f);
+  if(!q){ toast('⚠️ Detalle no disponible'); return; }
   document.getElementById('mTitle').textContent='Folio '+f;
   let h='';
   if(q.s==='empty') h='<span class="bdg bdg-gr">Sin asignar</span>';
-  if(q.env){const e=q.env; h+='<div class="ibox ibox-w"><div class="ibox-lbl">📤 Envío</div><div class="irow"><strong>Producto:</strong> '+e.nombre+'</div>'+(e.desc?'<div class="irow"><strong>Desc:</strong> '+e.desc+'</div>':'')+'<div class="irow"><strong>Emisor:</strong> '+e.emisorN+' &lt;'+e.emisorM+'&gt;</div>'+(e.dest?'<div class="irow"><strong>Para:</strong> '+e.dest+'</div>':'')+'<div class="irow"><strong>Fecha:</strong> '+e.fecha+'</div></div>';}
-  if(q.rx){const r=q.rx; h+='<div class="ibox ibox-g"><div class="ibox-lbl">📥 Recepción</div><div class="irow"><strong>Recibido por:</strong> '+r.nombre+'</div>'+(r.empresa?'<div class="irow"><strong>Empresa:</strong> '+r.empresa+'</div>':'')+'<div class="irow"><strong>Correo:</strong> '+r.mail+'</div><div class="irow"><strong>Fecha:</strong> '+r.fecha+'</div></div>';}
+  if(q.env){const e=q.env; h+='<div class="ibox ibox-w"><div class="ibox-lbl">📤 Envío</div><div class="irow"><strong>Producto:</strong> '+(e.nombre||'—')+'</div>'+(e.desc?'<div class="irow"><strong>Desc:</strong> '+e.desc+'</div>':'')+'<div class="irow"><strong>Emisor:</strong> '+(e.emisorN||'—')+' &lt;'+(e.emisorM||'')+'&gt;</div>'+(e.dest?'<div class="irow"><strong>Para:</strong> '+e.dest+'</div>':'')+'<div class="irow"><strong>Fecha:</strong> '+(e.fecha||'—')+'</div></div>';}
+  if(q.rx){const r=q.rx; h+='<div class="ibox ibox-g"><div class="ibox-lbl">📥 Recepción</div><div class="irow"><strong>Recibido por:</strong> '+(r.nombre||'—')+'</div>'+(r.empresa?'<div class="irow"><strong>Empresa:</strong> '+r.empresa+'</div>':'')+'<div class="irow"><strong>Correo:</strong> '+(r.mail||'—')+'</div><div class="irow"><strong>Fecha:</strong> '+(r.fecha||'—')+'</div></div>';}
   if(q.s==='loaded') h+='<button class="btn btn-w" style="margin-top:4px;" onclick="closeMDetail();openRx(\''+f+'\', true)">📱 Simular escaneo del receptor</button>';
   document.getElementById('mBody').innerHTML=h;
   document.getElementById('mDetail').classList.add('open');
