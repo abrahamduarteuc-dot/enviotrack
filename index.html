@@ -4,24 +4,25 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>EnvíoTrack — Codelpa</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
-<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-<!-- Detección temprana del modo receptor — antes de que cargue cualquier librería -->
+<!-- DETECCIÓN TEMPRANA: debe ser el PRIMER script, antes de todo -->
 <script>
 (function(){
   try {
-    const p = new URLSearchParams(window.location.search);
-    const h = window.location.hash;
-    if(p.get('rx') || h.startsWith('#rx/')){
-      document.documentElement.classList.add('prermode');
-      document.addEventListener('DOMContentLoaded', function(){
-        document.body.classList.add('prermode');
-      });
+    if(window.location.search.indexOf('rx=') !== -1 ||
+       window.location.hash.indexOf('#rx/') !== -1){
+      document.documentElement.className += ' rx-mode-early';
     }
   } catch(e){}
 })();
 </script>
+<style>
+/* Ocultar app INMEDIATAMENTE si hay parámetro rx en la URL */
+html.rx-mode-early .app { display:none !important; }
+html.rx-mode-early #rpPage { display:block !important; min-height:100vh; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
 <!-- ============================================================
      ENVÍOTRACK v1.0 — Codelpa R&D
