@@ -7,6 +7,21 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<!-- Detección temprana del modo receptor — antes de que cargue cualquier librería -->
+<script>
+(function(){
+  try {
+    const p = new URLSearchParams(window.location.search);
+    const h = window.location.hash;
+    if(p.get('rx') || h.startsWith('#rx/')){
+      document.documentElement.classList.add('prermode');
+      document.addEventListener('DOMContentLoaded', function(){
+        document.body.classList.add('prermode');
+      });
+    }
+  } catch(e){}
+})();
+</script>
 
 <!-- ============================================================
      ENVÍOTRACK v1.0 — Codelpa R&D
@@ -212,6 +227,9 @@ img{max-width:100%;}
 #rpPage{display:none;}
 body.rmode .app{display:none;}
 body.rmode #rpPage{display:block;min-height:100vh;background:var(--bg);}
+/* Ocultar app inmediatamente si la URL contiene ?rx= (antes de que JS cargue) */
+body.prermode .app{display:none!important;}
+body.prermode #rpPage{display:block!important;min-height:100vh;background:var(--bg);}
 .rp-hdr{background:var(--accent);padding:22px 18px 18px;text-align:center;color:white;}
 .rp-folio{font-size:40px;font-weight:900;letter-spacing:.03em;margin-bottom:2px;}
 .rp-sub{font-size:12px;opacity:.75;}
@@ -542,6 +560,8 @@ function checkQRParam(){
   if(params.get('rx')) folioRaw = params.get('rx');
   else if(hashVal.startsWith('#rx/')) folioRaw = hashVal.replace('#rx/','');
   if(folioRaw){
+    // Activar modo receptor INMEDIATAMENTE antes de cualquier llamada async
+    document.body.classList.add('rmode');
     const f = normFolio(folioRaw);
     openRx(f);
   }
