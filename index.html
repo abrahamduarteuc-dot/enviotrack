@@ -507,8 +507,8 @@ function save() { try { localStorage.setItem(SK, JSON.stringify(S)); } catch(e){
 function load() { try { const r = localStorage.getItem(SK); if(r) S = JSON.parse(r); } catch(e){} }
 load();
 
-// URL que va dentro del QR
-function qrUrl(folio) { return CFG.APP_URL + '#rx/' + folio; }
+// URL que va dentro del QR — usa ?rx= en vez de #rx/ para compatibilidad con lectores QR de iPhone
+function qrUrl(folio) { return CFG.APP_URL + '?rx=' + parseInt(folio,10); }
 
 // ── INIT
 document.getElementById('hdrDate').textContent =
@@ -531,18 +531,23 @@ try { emailjs.init(CFG.EMAILJS.publicKey); } catch(e){}
   }
 })();
 
-// ── Modo receptor (QR escaneado)
+// ── Modo receptor (QR escaneado) — detecta ?rx= en la URL
 function normFolio(f){ return String(parseInt(String(f).replace(/[^0-9]/g,''),10)||0).padStart(3,'0'); }
 
-function checkHash(){
-  const h = window.location.hash;
-  if(h.startsWith('#rx/')){
-    const f = normFolio(h.replace('#rx/',''));
+function checkQRParam(){
+  // Soporta tanto ?rx=1 (nuevo) como #rx/1 (legacy)
+  const params = new URLSearchParams(window.location.search);
+  const hashVal = window.location.hash;
+  let folioRaw = null;
+  if(params.get('rx')) folioRaw = params.get('rx');
+  else if(hashVal.startsWith('#rx/')) folioRaw = hashVal.replace('#rx/','');
+  if(folioRaw){
+    const f = normFolio(folioRaw);
     openRx(f);
   }
 }
-checkHash();
-window.addEventListener('hashchange', checkHash);
+checkQRParam();
+window.addEventListener('hashchange', checkQRParam);
 
 // ── TABS
 function tab(name){
@@ -646,8 +651,11 @@ function stopScan(){
 }
 
 async function onScanSuccess(text){
-  // Extraer el folio del texto del QR
-  let folio = normFolio(text.includes('#rx/') ? text.split('#rx/')[1] : text);
+  // Extraer folio — soporta ?rx=1, #rx/1, o solo el número
+  let raw = text;
+  if(text.includes('?rx=')) raw = text.split('?rx=')[1].split('&')[0];
+  else if(text.includes('#rx/')) raw = text.split('#rx/')[1];
+  const folio = normFolio(raw);
   if(!folio || folio==='000'){ toast('⚠️ QR no válido'); return; }
 
   stopScan();
