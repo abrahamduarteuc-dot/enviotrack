@@ -406,7 +406,8 @@ body.prermode #rpPage{display:block!important;min-height:100vh;background:var(--
     <div class="rp-sub">EnvíoTrack · Codelpa</div>
   </div>
   <div class="rp-body">
-    <button class="btn btn-g btn-sm" onclick="backToApp()" style="margin-bottom:12px;width:auto;">← Volver</button>
+    <!-- Botón volver: solo visible cuando se accede desde dentro de la app -->
+    <button class="btn btn-g btn-sm" onclick="backToApp()" id="btnVolverApp" style="margin-bottom:12px;width:auto;display:none;">← Volver</button>
 
     <!-- Info del envío -->
     <div id="rpInfo"></div>
@@ -564,7 +565,7 @@ function checkQRParam(){
     // Activar modo receptor INMEDIATAMENTE antes de cualquier llamada async
     document.body.classList.add('rmode');
     const f = normFolio(folioRaw);
-    openRx(f);
+    openRx(f, true);
   }
 }
 checkQRParam();
@@ -632,7 +633,7 @@ renderGrid();
 function qClick(f){
   const q=S.list.find(x=>x.f===f);
   if(q&&q.s==='loaded'){
-    if(confirm('📱 Simular escaneo del receptor para Folio '+f+'?')) openRx(f);
+    if(confirm('📱 Simular escaneo del receptor para Folio '+f+'?')) openRx(f, true);
   } else { openDetail(f); }
 }
 
@@ -769,7 +770,7 @@ async function regEnvio(){
   sheetsPush(selF,'envio',envData).catch(e=>console.warn('Sheets bg error:',e));
 }
 
-function simScan(){ if(lastF) openRx(lastF); }
+function simScan(){ if(lastF) openRx(lastF, true); }
 
 function resetSend(){
   selF=null;
@@ -787,8 +788,10 @@ function resetSend(){
 
 // ── RECEPTOR PAGE
 let rpF=null;
-let rpEnvData=null; // datos del envío cargados desde Sheets (receptor en otro equipo)
-async function openRx(f){
+let rpEnvData=null;
+let rpFromApp=false; // true cuando viene de simulación interna, false cuando viene de QR externo
+
+async function openRx(f, fromApp){
   // Reset pantalla receptor
   document.getElementById('rpForm').style.display='block';
   document.getElementById('rpDone').style.display='none';
@@ -798,31 +801,33 @@ async function openRx(f){
   document.body.classList.add('rmode');
   document.getElementById('rpFolioNum').textContent='Folio '+f;
   rpF=f;
+  rpFromApp=!!fromApp;
 
-  // Google Sheets es la fuente de verdad: consultar estado del folio
+  // Mostrar botón volver solo cuando viene desde la app (simulación)
+  const btnVolver=document.getElementById('btnVolverApp');
+  if(btnVolver) btnVolver.style.display=fromApp?'inline-flex':'none';
+
+  // Google Sheets es la fuente de verdad
   document.getElementById('rpInfo').innerHTML=msgBox('⏳','Cargando...','Consultando el folio en el servidor.');
   document.getElementById('rpForm').style.display='none';
 
   const remote=await fetchFolioFromSheets(f);
 
-  // ── Folio inexistente
   if(!remote || remote.estado==='inexistente'){
     document.getElementById('rpInfo').innerHTML=msgBox('🔍','Folio no encontrado','El folio <strong>'+f+'</strong> no existe en el sistema.');
     return;
   }
-  // ── Folio LIBRE: el envío aún no fue registrado
   if(remote.estado==='libre' || !remote.env){
-    document.getElementById('rpInfo').innerHTML=msgBox('📭','Envío aún no registrado','El folio <strong>'+f+'</strong> todavía no tiene un envío asociado. El emisor debe registrarlo desde la aplicación antes de la recepción.');
+    document.getElementById('rpInfo').innerHTML=msgBox('📭','Envío aún no registrado','El folio <strong>'+f+'</strong> todavía no tiene un envío asociado.');
     return;
   }
-  // ── Folio ya RECIBIDO
   if(remote.estado==='recibido'){
     const r=remote.rx;
     document.getElementById('rpInfo').innerHTML=msgBox('✅','Ya fue recibido','Recibido por <strong>'+(r?r.nombre:'—')+'</strong>'+(r&&r.fecha?' el '+r.fecha:'')+'.');
     return;
   }
 
-  // ── Folio EN TRÁNSITO: mostrar formulario de recepción
+  // Folio EN TRÁNSITO: mostrar formulario de recepción
   document.getElementById('rpForm').style.display='block';
   rpEnvData=remote.env;
   const e=remote.env;
@@ -975,9 +980,30 @@ function setFilt(f){
   });
 }
 function filt(f){setFilt(f);renderLog();}
-function renderLog(){
+async function renderLog(){
   const c=document.getElementById('recList');
-  let items=[...S.list].filter(q=>q.s!=='empty').reverse();
+  c.innerHTML='<div class="empty"><div class="empty-ico">⏳</div><div style="font-size:14px;">Cargando...</div></div>';
+  let items=[];
+  try {
+    if(!CFG.SHEETS_URL.includes('TU_SCRIPT_ID')){
+      const res=await fetch(CFG.SHEETS_URL);
+      const rows=await res.json();
+      const map={};
+      rows.slice(1).forEach(r=>{
+        const f=String(r[0]).trim();
+        if(!f||f==='0'||f==='Folio') return;
+        const folio=String(parseInt(f,10)||0).padStart(3,'0');
+        const tipo=String(r[1]).trim();
+        let payload=null;
+        try{ payload=typeof r[2]==='string'?JSON.parse(r[2]):r[2]; }catch(e){}
+        if(!map[folio]) map[folio]={f:folio,s:'empty',env:null,rx:null};
+        if(tipo==='envio'){ map[folio].env=payload; map[folio].s='loaded'; }
+        if(tipo==='recepcion'){ map[folio].rx=payload; map[folio].s='received'; }
+      });
+      items=Object.values(map).filter(q=>q.s!=='empty').reverse();
+    }
+  } catch(e){ console.warn('renderLog error:',e); }
+  if(!items.length) items=[...S.list].filter(q=>q.s!=='empty').reverse();
   if(cf==='loaded') items=items.filter(q=>q.s==='loaded');
   if(cf==='received') items=items.filter(q=>q.s==='received');
   if(!items.length){c.innerHTML='<div class="empty"><div class="empty-ico">📭</div><div style="font-size:14px;">Sin registros</div></div>';return;}
@@ -993,6 +1019,18 @@ function renderLog(){
 }
 
 // ── MODAL DETALLE
+function openDetail(f){
+  const q=S.list.find(x=>x.f===f);
+  if(!q){ toast('⚠️ Abre Registros desde la misma sesión para ver detalle'); return; }
+  document.getElementById('mTitle').textContent='Folio '+f;
+  let h='';
+  if(q.s==='empty') h='<span class="bdg bdg-gr">Sin asignar</span>';
+  if(q.env){const e=q.env; h+='<div class="ibox ibox-w"><div class="ibox-lbl">📤 Envío</div><div class="irow"><strong>Producto:</strong> '+e.nombre+'</div>'+(e.desc?'<div class="irow"><strong>Desc:</strong> '+e.desc+'</div>':'')+'<div class="irow"><strong>Emisor:</strong> '+e.emisorN+' &lt;'+e.emisorM+'&gt;</div>'+(e.dest?'<div class="irow"><strong>Para:</strong> '+e.dest+'</div>':'')+'<div class="irow"><strong>Fecha:</strong> '+e.fecha+'</div></div>';}
+  if(q.rx){const r=q.rx; h+='<div class="ibox ibox-g"><div class="ibox-lbl">📥 Recepción</div><div class="irow"><strong>Recibido por:</strong> '+r.nombre+'</div>'+(r.empresa?'<div class="irow"><strong>Empresa:</strong> '+r.empresa+'</div>':'')+'<div class="irow"><strong>Correo:</strong> '+r.mail+'</div><div class="irow"><strong>Fecha:</strong> '+r.fecha+'</div></div>';}
+  if(q.s==='loaded') h+='<button class="btn btn-w" style="margin-top:4px;" onclick="closeMDetail();openRx(\''+f+'\', true)">📱 Simular escaneo del receptor</button>';
+  document.getElementById('mBody').innerHTML=h;
+  document.getElementById('mDetail').classList.add('open');
+}
 function openDetail(f){
   const q=S.list.find(x=>x.f===f); if(!q)return;
   document.getElementById('mTitle').textContent='Folio '+f;
