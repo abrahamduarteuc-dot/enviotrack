@@ -719,24 +719,25 @@ async function regEnvio(){
   if(!nombre||!emisorN||!emisorM){toast('⚠️ Completa los campos obligatorios (*)');return;}
 
   const btn=document.getElementById('btnRegEnvio');
-  btn.innerHTML='<span class="spin"></span> Guardando...';
+  btn.innerHTML='<span class="spin"></span> Registrando...';
   btn.disabled=true;
 
   const q=S.list.find(x=>x.f===selF);
-  q.s='loaded';
-  q.env={nombre, desc:document.getElementById('eDesc').value.trim(), emisorN, emisorM, dest:document.getElementById('eDest').value.trim(), fecha:document.getElementById('eFecha').value, ts:new Date().toISOString()};
+  if(q){ q.s='loaded'; q.env={nombre, desc:document.getElementById('eDesc').value.trim(), emisorN, emisorM, dest:document.getElementById('eDest').value.trim(), fecha:document.getElementById('eFecha').value, ts:new Date().toISOString()}; }
+  const envData = q ? q.env : {nombre, desc:document.getElementById('eDesc').value.trim(), emisorN, emisorM, dest:document.getElementById('eDest').value.trim(), fecha:document.getElementById('eFecha').value, ts:new Date().toISOString()};
   save(); updateStats(); lastF=selF;
 
-  // Guardar en Google Sheets
-  await sheetsPush(selF,'envio',q.env);
-
+  // Confirmar inmediatamente — Sheets se guarda en segundo plano
   btn.innerHTML='✅ Registrar envío'; btn.disabled=false;
-  document.getElementById('sConfirmTxt').textContent='Folio '+selF+' · "'+nombre+'" registrado. El receptor recibirá el paquete y firmará con el QR.';
+  document.getElementById('sConfirmTxt').textContent='Folio '+selF+' · "'+nombre+'" registrado. El receptor firmará con el QR.';
   document.getElementById('sStep2').style.display='none';
   document.getElementById('sConfirm').style.display='block';
   const cq=document.getElementById('cQR'); cq.innerHTML='';
   new QRCode(cq,{text:qrUrl(selF),width:120,height:120,colorDark:'#1A1F2E',colorLight:'#fff',correctLevel:QRCode.CorrectLevel.M});
   toast('✅ Envío registrado');
+
+  // Guardar en Sheets en segundo plano (no bloquea la UI)
+  sheetsPush(selF,'envio',envData).catch(e=>console.warn('Sheets bg error:',e));
 }
 
 function simScan(){ if(lastF) openRx(lastF); }
@@ -865,20 +866,13 @@ async function confirm_rx(){
   const sigData=sc.toDataURL('image/png');
   const rx={nombre,mail,empresa:document.getElementById('rpE').value.trim(),fecha:new Date().toLocaleDateString('es-CL'),ts:new Date().toISOString(),firma:sigData};
 
-  // Actualizar copia local si existe (caso emisor mismo equipo)
+  // Actualizar copia local si existe
   let q=S.list.find(x=>x.f===rpF);
   if(q){ q.s='received'; q.rx=rx; save(); updateStats(); }
 
-  // Datos del envío: del local o de rpEnvData (cargado desde Sheets)
-  const env = (q && q.env) ? q.env : rpEnvData;
+  const env=(q&&q.env)?q.env:rpEnvData;
 
-  // Guardar recepción en Google Sheets (sin la firma, que es muy pesada)
-  const rxLite={nombre:rx.nombre, mail:rx.mail, empresa:rx.empresa, fecha:rx.fecha, ts:rx.ts};
-  await sheetsPush(rpF,'recepcion',rxLite);
-
-  // Enviar mail al emisor
-  await sendMailRx(env, rx, rpF);
-
+  // Mostrar comprobante inmediatamente — no esperar Sheets ni mail
   btn.innerHTML='✅ Confirmar recepción'; btn.disabled=false;
   document.getElementById('rpForm').style.display='none';
   document.getElementById('rpDoneTxt').textContent='"'+(env?env.nombre:'')+'" recibido. Se notificó a '+(env?env.emisorM:'')+'.';
@@ -893,20 +887,33 @@ async function confirm_rx(){
     +'<img src="'+sigData+'" style="margin-top:10px;border:1px solid var(--border);border-radius:6px;width:100%;height:50px;object-fit:contain;">';
   document.getElementById('rpDone').style.display='block';
   toast('🎉 Recepción confirmada');
+
+  // Guardar en Sheets y enviar mail en segundo plano
+  const rxLite={nombre:rx.nombre,mail:rx.mail,empresa:rx.empresa,fecha:rx.fecha,ts:rx.ts};
+  sheetsPush(rpF,'recepcion',rxLite).catch(e=>console.warn('Sheets rx error:',e));
+  sendMailRx(env,rx,rpF).catch(e=>console.warn('Mail error:',e));
 }
 
 // ── GOOGLE SHEETS
-// Guarda un registro (envío o recepción). El payload se serializa como JSON.
+// Guarda un registro con timeout de 8 segundos para no bloquear la UI
 async function sheetsPush(folio, tipo, payload){
-  if(CFG.SHEETS_URL.includes('TU_SCRIPT_ID')) return; // no configurado aún
+  if(CFG.SHEETS_URL.includes('TU_SCRIPT_ID')) return;
+  const body = JSON.stringify({action:'save', folio: parseInt(folio,10), tipo, payload: JSON.stringify(payload)});
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), 8000);
   try {
     await fetch(CFG.SHEETS_URL, {
       method:'POST',
       mode:'no-cors',
       headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({action:'save', folio, tipo, payload: JSON.stringify(payload)})
+      body,
+      signal: controller.signal
     });
-  } catch(e){ console.warn('Sheets error:',e); }
+  } catch(e){
+    console.warn('Sheets push error (non-blocking):', e.name==='AbortError'?'timeout':e);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ── EMAILJS — notificación al emisor cuando el receptor confirma
