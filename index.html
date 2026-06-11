@@ -555,20 +555,18 @@ try { emailjs.init(CFG.EMAILJS.publicKey); } catch(e){}
 function normFolio(f){ return String(parseInt(String(f).replace(/[^0-9]/g,''),10)||0).padStart(3,'0'); }
 
 function checkQRParam(){
-  // Soporta tanto ?rx=1 (nuevo) como #rx/1 (legacy)
   const params = new URLSearchParams(window.location.search);
   const hashVal = window.location.hash;
   let folioRaw = null;
   if(params.get('rx')) folioRaw = params.get('rx');
   else if(hashVal.startsWith('#rx/')) folioRaw = hashVal.replace('#rx/','');
   if(folioRaw){
-    // Activar modo receptor INMEDIATAMENTE antes de cualquier llamada async
     document.body.classList.add('rmode');
     const f = normFolio(folioRaw);
-    openRx(f, true);
+    openRx(f, false); // false = acceso externo por QR, no mostrar botón volver
   }
 }
-checkQRParam();
+// Se llama al final del script después de inicializar canvas y firma
 window.addEventListener('hashchange', checkQRParam);
 
 // ── TABS
@@ -1350,6 +1348,8 @@ async function exportWord(){
 function toast(msg){const el=document.getElementById('toast');el.textContent=msg;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2600);}
 
 setFilt('all');
+// Inicializar modo receptor DESPUÉS de que canvas y firma estén listos
+checkQRParam();
 </script>
 </body>
 </html>
