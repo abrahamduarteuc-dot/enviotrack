@@ -1293,21 +1293,37 @@ async function exportPDF(){
 }
 
 // ── EXPORTAR WORD (usando docx.js desde CDN)
+async function loadDocxLib(){
+  if(window.docx) return;
+  const cdns=[
+    'https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.js',
+    'https://unpkg.com/docx@8.5.0/build/index.js'
+  ];
+  let lastErr=null;
+  for(const src of cdns){
+    try{
+      await new Promise((res,rej)=>{
+        const s=document.createElement('script');
+        s.src=src;
+        s.onload=res; s.onerror=()=>rej(new Error('No se pudo cargar '+src));
+        document.head.appendChild(s);
+      });
+      if(window.docx) return; // cargó OK
+    } catch(e){ lastErr=e; }
+  }
+  throw lastErr || new Error('No se pudo cargar la librería docx (sin conexión al CDN)');
+}
+
 async function exportWord(){
   const av=S.list.filter(q=>q.s==='empty');
   if(!av.length){toast('Sin folios disponibles');return;}
   const btn=document.getElementById('btnWord');
   btn.innerHTML='<span class="spin"></span> Generando...'; btn.disabled=true;
 
-  // Cargar librería docx si no está cargada
-  if(!window.docx){
-    await new Promise((res,rej)=>{
-      const s=document.createElement('script');
-      s.src='https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.js';
-      s.onload=res; s.onerror=rej;
-      document.head.appendChild(s);
-    });
-  }
+  try {
+
+  // Cargar librería docx si no está cargada (con CDN de respaldo)
+  await loadDocxLib();
 
   // Generar QRs en paralelo (antes: secuencial con 350ms por QR → muy lento con muchos folios)
   await Promise.all(av.map(q=>getQRDataURL(q.f,300)));
@@ -1412,8 +1428,14 @@ async function exportWord(){
   a.href=url; a.download='EnvioTrack_Etiquetas_'+new Date().toISOString().slice(0,10)+'.docx';
   a.click();
   URL.revokeObjectURL(url);
-  btn.innerHTML='📄 Exportar Word'; btn.disabled=false;
   toast('✅ Word descargado — ajusta el tamaño de celda si es necesario');
+
+  } catch(e){
+    console.error('exportWord error:', e);
+    toast('⚠️ No se pudo generar el Word: '+(e.message||'error desconocido'));
+  } finally {
+    btn.innerHTML='📄 Exportar Word'; btn.disabled=false;
+  }
 }
 
 // ── TOAST
