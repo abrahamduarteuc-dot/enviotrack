@@ -508,7 +508,8 @@ const CFG = {
   EMAILJS: {
     publicKey:  'Pu-2yitFLnPn0d5CT',
     serviceID:  'service_50p2raq',
-    templateID: 'template_pqrvohn'
+    templateID: 'template_pqrvohn',       // notifica al EMISOR
+    templateIDReceptor: 'template_7d52wjc'         // notifica al RECEPTOR
   },
 
   // Google Sheets Web App URL
@@ -929,12 +930,38 @@ async function confirm_rx(){
   toast('🎉 Recepción confirmada');
 
   // Guardar en Sheets y enviar mail en segundo plano
-  const rxLite={nombre:rx.nombre,mail:rx.mail,empresa:rx.empresa,fecha:rx.fecha,ts:rx.ts};
+  const rxLite={nombre:rx.nombre,mail:rx.mail,empresa:rx.empresa,fecha:rx.fecha,ts:rx.ts,firma:rx.firma};
   sheetsPush(rpF,'recepcion',rxLite).catch(e=>console.warn('Sheets rx error:',e));
   sendMailRx(env,rx,rpF).catch(e=>console.warn('Mail error:',e));
+  sendMailReceptor(env,rx,rpF).catch(e=>console.warn('Mail receptor error:',e));
 }
 
-// ── GOOGLE SHEETS
+// ── EMAILJS — notificación al RECEPTOR confirmando que su recepción quedó registrada
+async function sendMailReceptor(env, rx, folio){
+  if(CFG.EMAILJS.publicKey==='TU_PUBLIC_KEY'){ return; }
+  if(CFG.EMAILJS.templateIDReceptor==='TU_TEMPLATE_RECEPTOR_ID'){ console.warn('Template receptor no configurado — se omite mail al receptor'); return; }
+  if(!rx||!rx.mail){ console.warn('sendMailReceptor: sin correo del receptor'); return; }
+  if(typeof emailjs==='undefined'){ console.warn('Librería EmailJS no cargó'); return; }
+  try {
+    emailjs.init(CFG.EMAILJS.publicKey);
+    const resp = await emailjs.send(CFG.EMAILJS.serviceID, CFG.EMAILJS.templateIDReceptor, {
+      to_email:  rx.mail,
+      from_name: rx.nombre || 'Receptor',
+      folio:     folio,
+      producto:  env?env.nombre:'',
+      receptor:  rx.nombre,
+      empresa:   rx.empresa || '—',
+      fecha:     rx.fecha,
+      emisor:    env?env.emisorN:'',
+      org:       CFG.ORG || 'Codelpa'
+    });
+    console.log('Mail receptor enviado:', resp.status, resp.text);
+  } catch(e){
+    console.error('EmailJS receptor error:', e);
+  }
+}
+
+
 // Guarda un registro individual con timeout de 8 segundos
 async function sheetsPush(folio, tipo, payload){
   if(CFG.SHEETS_URL.includes('TU_SCRIPT_ID')) return;
@@ -1093,7 +1120,9 @@ async function openDetail(f){
         +'<div class="irow"><strong>Recibido por:</strong> '+(r.nombre||'—')+'</div>'
         +(r.empresa?'<div class="irow"><strong>Empresa:</strong> '+r.empresa+'</div>':'')
         +'<div class="irow"><strong>Correo:</strong> '+(r.mail||'—')+'</div>'
-        +'<div class="irow"><strong>Fecha:</strong> '+(r.fecha||'—')+'</div></div>';
+        +'<div class="irow"><strong>Fecha:</strong> '+(r.fecha||'—')+'</div>'
+        +(r.firma?'<div class="irow" style="margin-top:6px;"><strong>Firma:</strong></div><img src="'+r.firma+'" style="margin-top:4px;border:1px solid var(--border);border-radius:6px;width:100%;height:60px;object-fit:contain;background:white;">':'')
+        +'</div>';
     }
     if(q.s==='loaded') h+='<button class="btn btn-w" style="margin-top:4px;" onclick="closeMDetail();openRx(\''+f+'\', true)">📱 Simular escaneo del receptor</button>';
   }
@@ -1215,8 +1244,8 @@ async function exportPDF(){
   const btn=document.getElementById('btnPDF');
   btn.innerHTML='<span class="spin"></span> Generando...'; btn.disabled=true;
 
-  // Generar todos los QR primero
-  for(const q of av){ await getQRDataURL(q.f,300); }
+  // Generar todos los QR primero (en paralelo)
+  await Promise.all(av.map(q=>getQRDataURL(q.f,300)));
 
   // Construir HTML para impresión con medidas exactas
   const cols=lblCols;
@@ -1235,13 +1264,14 @@ async function exportPDF(){
 
   const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Etiquetas EnvíoTrack</title>
   <style>
-    @page{margin:10mm;}
+    @page{margin:8mm;}
     *{box-sizing:border-box;margin:0;padding:0;}
     body{font-family:Arial,sans-serif;}
-    .grid{display:flex;flex-wrap:wrap;gap:${gap}mm;}
+    .grid{display:grid;grid-template-columns:repeat(${cols}, ${W}mm);gap:${gap}mm;justify-content:start;align-content:start;}
     .lbl{width:${W}mm;height:${H}mm;border:1.2px solid #1A56DB;border-radius:3px;
       display:flex;flex-direction:column;align-items:center;justify-content:center;
-      padding:1.5mm;text-align:center;background:white;overflow:hidden;}
+      padding:1.5mm;text-align:center;background:white;overflow:hidden;
+      break-inside:avoid;page-break-inside:avoid;}
     .lbrand{font-size:5px;font-weight:800;color:#9CA3AF;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:1mm;}
     .lqr{width:${Math.round(Math.min(W,H)*0.55)}mm;height:${Math.round(Math.min(W,H)*0.55)}mm;image-rendering:pixelated;}
     .lnum{font-size:${Math.max(8,Math.round(H*0.22))}px;font-weight:900;color:#1A56DB;margin-top:1mm;line-height:1;}
@@ -1252,8 +1282,12 @@ async function exportPDF(){
   </body></html>`;
 
   const win=window.open('','_blank');
-  if(win){ win.document.write(html); win.document.close(); }
-  else { toast('⚠️ Permite las ventanas emergentes para exportar el PDF'); }
+  if(win){
+    win.document.write(html); win.document.close();
+    toast('💡 En el diálogo de impresión, desactiva "Encabezados y pies de página" para mejor alineación');
+  } else {
+    toast('⚠️ Permite las ventanas emergentes para exportar el PDF');
+  }
 
   btn.innerHTML='📑 Exportar PDF'; btn.disabled=false;
 }
@@ -1275,8 +1309,8 @@ async function exportWord(){
     });
   }
 
-  // Generar QRs
-  for(const q of av){ await getQRDataURL(q.f,300); }
+  // Generar QRs en paralelo (antes: secuencial con 350ms por QR → muy lento con muchos folios)
+  await Promise.all(av.map(q=>getQRDataURL(q.f,300)));
 
   const {Document,Packer,Table,TableRow,TableCell,Paragraph,ImageRun,TextRun,
          WidthType,BorderStyle,ShadingType,AlignmentType,VerticalAlign} = window.docx;
@@ -1302,8 +1336,6 @@ async function exportWord(){
       const bin=atob(b64);
       const arr=new Uint8Array(bin.length);
       for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
-      imgRun=new ImageRun({data:arr,transformation:{width:mmToEMU(qrMM)/9144,height:mmToEMU(qrMM)/9144},type:'png'});
-      // docx ImageRun usa puntos (pt): 1 pt = 12700 EMU
       imgRun=new ImageRun({data:arr,transformation:{width:Math.round(qrMM*2.835),height:Math.round(qrMM*2.835)},type:'png'});
     }
     const cellW=mmToDXA(W);
